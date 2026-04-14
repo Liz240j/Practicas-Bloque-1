@@ -1,0 +1,132 @@
+from machine import Pin, I2C, SPI
+import machine
+import ssd1306
+import time
+import dht
+import os
+import sdcard   # 🔥 IMPORTANTE
+
+# ---------------------------
+# OLED (I2C)
+# ---------------------------
+i2c = I2C(0, sda=Pin(21), scl=Pin(22))
+oled = ssd1306.SSD1306_I2C(128, 64, i2c)
+
+# ---------------------------
+# LEDs (ajusta si cambiaste pines)
+# ---------------------------
+led_rojo = Pin(15, Pin.OUT)
+led_verde = Pin(2, Pin.OUT)
+led_azul = Pin(17, Pin.OUT)
+
+def set_led(r, g, b):
+    led_rojo.value(r)
+    led_verde.value(g)
+    led_azul.value(b)
+
+# ---------------------------
+# DHT22
+# ---------------------------
+sensor = dht.DHT22(Pin(4))
+
+# ---------------------------
+# SPI + SD (CORREGIDO)
+# ---------------------------
+spi = SPI(1, baudrate=10000000, polarity=0, phase=0,
+          sck=Pin(18), mosi=Pin(23), miso=Pin(19))
+
+cs = Pin(5, Pin.OUT)
+
+sd_ok = False
+
+try:
+    sd = sdcard.SDCard(spi, cs)   # 🔥 CAMBIO CLAVE
+    os.mount(sd, "/sd")
+    print("SD OK")
+    sd_ok = True
+except Exception as e:
+    print("Error SD:", e)
+
+# ---------------------------
+# FSM (Estados)
+# ---------------------------
+IDLE = 0
+READ = 1
+DISPLAY = 2
+SAVE = 3
+ERROR = 4
+
+estado = IDLE
+
+temp = 0
+hum = 0
+
+# ---------------------------
+# FUNCIONES
+# ---------------------------
+def leer_sensor():
+    global temp, hum
+    try:
+        sensor.measure()
+        temp = sensor.temperature()
+        hum = sensor.humidity()
+        return True
+    except:
+        return False
+
+def mostrar_oled(msg1, msg2=""):
+    oled.fill(0)
+    oled.text(msg1, 0, 0)
+    oled.text(msg2, 0, 16)
+    oled.show()
+
+def guardar_sd():
+    try:
+        with open("/sd/datos.txt", "a") as f:
+            f.write("Temp: {:.1f}C Hum: {:.1f}%\n".format(temp, hum))
+        return True
+    except Exception as e:
+        print("Error guardando:", e)
+        return False
+
+# ---------------------------
+# LOOP PRINCIPAL (FSM)
+# ---------------------------
+while True:
+
+    if estado == IDLE:
+        set_led(0, 1, 0)  # verde
+        mostrar_oled("Sistema listo")
+        time.sleep(2)
+        estado = READ
+
+    elif estado == READ:
+        set_led(0, 0, 1)  # azul
+        if leer_sensor():
+            estado = DISPLAY
+        else:
+            estado = ERROR
+
+    elif estado == DISPLAY:
+        set_led(1, 1, 0)  # amarillo
+        mostrar_oled("Temp: {:.1f}C".format(temp),
+                     "Hum: {:.1f}%".format(hum))
+        time.sleep(2)
+        estado = SAVE
+
+    elif estado == SAVE:
+        set_led(1, 0, 1)  # morado
+        if sd_ok and guardar_sd():
+            mostrar_oled("Guardado OK")
+        else:
+            mostrar_oled("Error SD")
+            estado = ERROR
+            continue
+        time.sleep(2)
+        estado = IDLE
+
+    elif estado == ERROR:
+        set_led(1, 0, 0)  # rojo
+        mostrar_oled("ERROR")
+        time.sleep(3)
+        estado = IDLE
